@@ -1,0 +1,75 @@
+# -----------------------------
+# Python
+# -----------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.venv/
+.venv*/
+venv/
+**/.venv/
+**/.venv*/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+
+# -----------------------------
+# Node / Frontend
+# -----------------------------
+node_modules/
+.next/
+out/
+dist/
+coverage/
+*.tsbuildinfo
+
+# -----------------------------
+# Environment / Secrets
+# -----------------------------
+.env
+.env.*
+!.env.example
+frontend/.env.local
+frontend/.env.*.local
+backend/.env
+
+# -----------------------------
+# Logs / Runtime
+# -----------------------------
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# -----------------------------
+# Databases / Local state
+# -----------------------------
+*.sqlite
+*.sqlite3
+
+# -----------------------------
+# Generated workspaces / artifacts
+# -----------------------------
+backend/generated-workspaces/
+
+# -----------------------------
+# OS
+# -----------------------------
+Thumbs.db
+.DS_Store
+
+# -----------------------------
+# IDE / Editor
+# -----------------------------
+.idea/
+.vscode/settings.json
+.vscode/launch.json
