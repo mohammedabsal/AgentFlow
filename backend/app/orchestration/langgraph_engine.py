@@ -104,10 +104,11 @@ class OrchestrationEngine:
         project_id: str,
         project_name: str,
         user_prompt: str,
+        execution_id: Optional[str] = None,
         on_message: Optional[callable] = None,
     ) -> RunOutcomeContract:
         """Execute complete autonomous workflow."""
-        execution_id = str(uuid.uuid4())
+        execution_id = execution_id or str(uuid.uuid4())
         runtime = ExecutionRuntime(
             execution_id=execution_id,
             project_id=project_id,
@@ -126,9 +127,6 @@ class OrchestrationEngine:
         except Exception as e:
             logger.error(f"Workflow execution failed: {e}")
             raise
-
-        finally:
-            del self.active_executions[execution_id]
 
     async def get_execution_status(self, execution_id: str) -> Optional[dict]:
         """Get current execution status."""

@@ -36,7 +36,7 @@ function getLogIcon(type: string, level?: string) {
 
 function formatEventMessage(event: Record<string, unknown>): string {
   const type = String(event.type || 'unknown');
-  const payload = event.payload as Record<string, any> || {};
+  const payload = (event.payload || event.data) as Record<string, any> || {};
 
   switch (type) {
     case 'run_started':
@@ -45,8 +45,18 @@ function formatEventMessage(event: Record<string, unknown>): string {
       return `✅ Run completed - ${payload.artifact_count || 0} artifacts generated`;
     case 'run_failed':
       return `❌ Run failed: ${payload.error || 'Unknown error'}`;
+    case 'agent_started':
+      return `▶ Agent started: ${payload.agent || payload.step_id || 'Unknown agent'}`;
     case 'step_started':
       return `▶ Step started: ${payload.step_name || payload.agent || 'Unknown step'}`;
+    case 'agent_completed':
+      return `✓ Agent completed: ${payload.agent || payload.step_id || 'Unknown agent'} (${payload.artifact_count || 0} files)`;
+    case 'file_generated':
+      return `Generated file: ${payload.path || 'unknown path'}`;
+    case 'tool_call':
+      return `Tool ${payload.tool || 'call'}: ${payload.status || 'completed'}`;
+    case 'package_created':
+      return `ZIP package ready: ${payload.download_url || ''}`;
     case 'step_completed':
       return `✓ Step completed: ${payload.step_name || payload.agent || 'Unknown step'}`;
     case 'step_failed':
@@ -64,7 +74,7 @@ export function LiveLogsPanel({ events, connected, isRunning = false }: LiveLogs
   const logs: LogEntry[] = useMemo(() => {
     return events.map((event) => {
       const type = String(event.type || 'unknown');
-      const payload = event.payload as Record<string, any> || {};
+      const payload = (event.payload || event.data) as Record<string, any> || {};
       const timestamp = String(event.timestamp || new Date().toISOString());
 
       return {

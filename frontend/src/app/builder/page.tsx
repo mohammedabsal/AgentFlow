@@ -1,39 +1,38 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
-  Send,
   Code,
   Loader,
   CheckCircle,
   AlertCircle,
   Play,
   Pause,
-  Settings,
   Download,
   Share2,
 } from 'lucide-react';
-import { ExecutionTimeline } from '@/components/execution-timeline';
 import { LivePreview } from '@/components/live-preview';
 import { WorkspaceSidebar } from '@/components/workspace-sidebar';
 import { AgentStatusDashboard } from '@/components/agent-status-dashboard';
 import { LogsViewer } from '@/components/logs-viewer';
+import { api, createWebSocketUrl, type ArtifactRecord } from '@/services/api';
 
 export default function BuilderPage() {
   const [projectName, setProjectName] = useState('');
   const [userPrompt, setUserPrompt] = useState('');
-  const [executionId, setExecutionId] = useState<string | null>(null);
+  const [runId, setRunId] = useState<string | null>(null);
   const [status, setStatus] = useState<'idle' | 'running' | 'completed' | 'error'>('idle');
   const [logs, setLogs] = useState<Array<{ type: string; message: string; timestamp: string }>>([]);
   const [artifacts, setArtifacts] = useState<Array<{ id: string; path: string; content: string; language: string }>>([]);
+  const [liveFiles, setLiveFiles] = useState<Array<{ id: string; path: string; content: string; language: string }>>([]);
   const [selectedArtifact, setSelectedArtifact] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [expandedPanel, setExpandedPanel] = useState<'code' | 'preview' | 'logs'>('code');
   const websocketRef = useRef<WebSocket | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Start workflow execution
   const handleStartWorkflow = async () => {
@@ -46,26 +45,22 @@ export default function BuilderPage() {
     setStatus('running');
     setLogs([]);
     setArtifacts([]);
+    setLiveFiles([]);
 
     try {
-      // Call orchestration API
-      const response = await fetch('/api/orchestration/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          project_name: projectName,
-          user_prompt: userPrompt,
-          enable_self_healing: true,
-          max_iterations: 3,
-        }),
+      const project = await api.createProject({
+        name: projectName,
+        prompt: userPrompt,
+        workspace_name: 'Builder Workspace',
       });
+      const run = await api.createRun(project.id, { context: { source: 'builder_page' } });
 
-      const data = await response.json();
-      const newExecutionId = data.execution_id;
-      setExecutionId(newExecutionId);
+      setRunId(run.id);
+      addLog('info', `Queued run ${run.id}`);
 
-      // Connect to WebSocket for real-time updates
-      connectWebSocket(newExecutionId);
+      connectWebSocket(run.id);
+      refreshArtifacts(run.id);
+      startPolling(run.id);
     } catch (error) {
       console.error('Failed to start workflow:', error);
       setStatus('error');
@@ -75,20 +70,17 @@ export default function BuilderPage() {
   };
 
   // Connect to WebSocket for streaming updates
-  const connectWebSocket = (execId: string) => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/api/orchestration/ws/${execId}`;
-
-    const ws = new WebSocket(wsUrl);
+  const connectWebSocket = (activeRunId: string) => {
+    const ws = new WebSocket(createWebSocketUrl(`/api/runs/ws/${activeRunId}`));
 
     ws.onopen = () => {
-      addLog('info', 'Connected to execution stream');
+      addLog('info', 'Connected to run event stream');
     };
 
     ws.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data);
-        handleStreamMessage(message);
+        handleStreamMessage(message, activeRunId);
       } catch (error) {
         console.error('Failed to parse message:', error);
       }
@@ -108,34 +100,134 @@ export default function BuilderPage() {
   };
 
   // Handle incoming stream messages
-  const handleStreamMessage = (message: any) => {
+  const handleStreamMessage = (message: any, activeRunId: string) => {
+    const data = message.data || message.payload || {};
     switch (message.type) {
-      case 'log':
-        addLog(message.metadata?.level || 'info', message.content);
+      case 'connected':
+        addLog('info', `Connected to run ${activeRunId}`);
         break;
-      case 'status':
-        addLog('info', `Status: ${message.content}`);
+      case 'run_started':
+        addLog('info', 'Run started');
         break;
-      case 'artifact':
-        addLog('info', `Generated: ${message.metadata?.path || message.content}`);
-        if (message.metadata?.content) {
-          addArtifact(message.metadata.artifact_id, message.metadata.path, message.metadata.content);
-        }
+      case 'agent_started':
+        addLog('info', `Agent started: ${data.agent || data.step_id || 'unknown'}`);
         break;
-      case 'progress':
-        addLog('info', message.content);
+      case 'agent_completed':
+        addLog('info', `Agent completed: ${data.agent || data.step_id || 'unknown'}`);
+        refreshArtifacts(activeRunId);
         break;
-      case 'complete':
+      case 'file_generated': {
+        const path = String(data.path || 'generated/file.txt');
+        addLog('info', `Generated: ${path}`);
+        addLiveFile(path, String(data.source || data.agent || 'agent'));
+        refreshArtifacts(activeRunId);
+        break;
+      }
+      case 'tool_call':
+        addLog('info', `Tool ${data.tool || 'call'} ${data.status || ''}`);
+        break;
+      case 'package_created':
+        addLog('info', `Package ready: ${data.download_url || ''}`);
+        refreshArtifacts(activeRunId);
+        break;
+      case 'run_completed':
         setStatus('completed');
-        addLog('info', message.content);
+        addLog('info', 'Run completed');
+        refreshArtifacts(activeRunId);
+        setTimeout(() => refreshArtifacts(activeRunId), 1200);
         setLoading(false);
         break;
-      case 'error':
+      case 'run_failed':
+      case 'agent_failed':
         setStatus('error');
-        addLog('error', message.content);
+        addLog('error', String(data.error || 'Run failed'));
+        setLoading(false);
+        break;
+      default:
+        if (message.content) addLog('info', String(message.content));
         break;
     }
   };
+
+  const startPolling = (activeRunId: string) => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+    }
+
+    pollRef.current = setInterval(async () => {
+      try {
+        const run = await api.run(activeRunId);
+        await refreshArtifacts(activeRunId);
+
+        if (run.status === 'completed') {
+          setStatus('completed');
+          setLoading(false);
+          if (pollRef.current) clearInterval(pollRef.current);
+        }
+
+        if (run.status === 'failed') {
+          setStatus('error');
+          setLoading(false);
+          addLog('error', run.error || 'Run failed');
+          if (pollRef.current) clearInterval(pollRef.current);
+        }
+      } catch (error) {
+        addLog('error', `Polling failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }, 2500);
+  };
+
+  const refreshArtifacts = async (activeRunId: string) => {
+    try {
+      const records = await api.artifacts(activeRunId);
+      setArtifacts(records.map(toBuilderArtifact));
+      if (!selectedArtifact && records[0]) {
+        setSelectedArtifact(records[0].id);
+      }
+    } catch (error) {
+      addLog('error', `Failed to load artifacts: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  const toBuilderArtifact = (artifact: ArtifactRecord) => ({
+    id: artifact.id,
+    path: artifact.path,
+    content: artifact.content,
+    language: getLanguage(artifact.path),
+  });
+
+  const getLanguage = (path: string) => {
+    if (path.endsWith('.py')) return 'python';
+    if (path.endsWith('.ts') || path.endsWith('.tsx')) return 'typescript';
+    if (path.endsWith('.json')) return 'json';
+    if (path.endsWith('.sql')) return 'sql';
+    if (path.endsWith('.md')) return 'markdown';
+    if (path.endsWith('.yml') || path.endsWith('.yaml')) return 'yaml';
+    return 'javascript';
+  };
+
+  const addLiveFile = (path: string, source: string) => {
+    const id = `live-${path}`;
+    setLiveFiles((current) => {
+      if (current.some((file) => file.path === path)) return current;
+      return [
+        ...current,
+        {
+          id,
+          path,
+          language: getLanguage(path),
+          content: `// ${path} generated by ${source}. Full content is persisted when the run completes.`,
+        },
+      ];
+    });
+    if (!selectedArtifact) {
+      setSelectedArtifact(id);
+    }
+  };
+
+  const visibleArtifacts = artifacts.length > 0
+    ? artifacts
+    : liveFiles;
 
   const addLog = (type: string, message: string) => {
     setLogs((prev) => [
@@ -148,22 +240,16 @@ export default function BuilderPage() {
     ]);
   };
 
-  const addArtifact = (id: string, path: string, content: string) => {
-    const language = path.endsWith('.py') ? 'python' : path.endsWith('.ts') ? 'typescript' : 'javascript';
-    setArtifacts((prev) => [...prev, { id, path, content, language }]);
-    if (!selectedArtifact) {
-      setSelectedArtifact(id);
-    }
-  };
-
   // Cancel execution
   const handleCancel = async () => {
-    if (!executionId) return;
+    if (!runId) return;
 
     try {
-      await fetch(`/api/orchestration/cancel/${executionId}`, { method: 'POST' });
       setStatus('idle');
       setLoading(false);
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+      }
       if (websocketRef.current) {
         websocketRef.current.close();
       }
@@ -177,7 +263,7 @@ export default function BuilderPage() {
       {/* Left Sidebar - Workspace */}
       <WorkspaceSidebar
         projectName={projectName}
-        artifacts={artifacts}
+        artifacts={visibleArtifacts}
         selectedArtifact={selectedArtifact}
         onSelectArtifact={setSelectedArtifact}
       />
@@ -208,8 +294,8 @@ export default function BuilderPage() {
                 Cancel
               </Button>
             )}
-            {status === 'completed' && (
-              <Button variant="default" size="sm">
+            {status === 'completed' && runId && (
+              <Button variant="default" size="sm" onClick={() => { window.location.href = api.downloadUrl(runId); }}>
                 <Download className="w-4 h-4 mr-2" />
                 Export
               </Button>
@@ -294,21 +380,21 @@ export default function BuilderPage() {
           {/* Code/Preview Panel */}
           <div className="flex-1 flex flex-col">
             {expandedPanel === 'preview' ? (
-              <LivePreview artifacts={artifacts} selectedId={selectedArtifact} />
+              <LivePreview artifacts={visibleArtifacts} selectedId={selectedArtifact} />
             ) : (
               <div className="flex-1 bg-slate-900 flex flex-col">
-                {selectedArtifact && artifacts.find((a) => a.id === selectedArtifact) ? (
+                {selectedArtifact && visibleArtifacts.find((a) => a.id === selectedArtifact) ? (
                   <>
                     <div className="bg-slate-800 border-b border-slate-700 p-3 flex justify-between items-center">
                       <code className="text-sm text-slate-400">
-                        {artifacts.find((a) => a.id === selectedArtifact)?.path}
+                        {visibleArtifacts.find((a) => a.id === selectedArtifact)?.path}
                       </code>
                       <Button variant="ghost" size="sm">
                         <Share2 className="w-4 h-4" />
                       </Button>
                     </div>
                     <pre className="flex-1 overflow-auto p-4 text-sm text-slate-300 font-mono">
-                      {artifacts.find((a) => a.id === selectedArtifact)?.content}
+                      {visibleArtifacts.find((a) => a.id === selectedArtifact)?.content}
                     </pre>
                   </>
                 ) : (

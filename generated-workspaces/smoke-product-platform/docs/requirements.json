@@ -1,0 +1,11 @@
+{
+  "product_name": "Smoke Product",
+  "objective": "Build a small CRM",
+  "acceptance_criteria": [
+    "Next.js frontend renders a product dashboard",
+    "FastAPI backend exposes health, product, auth, and task endpoints",
+    "SQL schema defines users, projects, and tasks",
+    "Docker Compose starts frontend, backend, and database services",
+    "Generated project can be downloaded as a ZIP archive"
+  ]
+}

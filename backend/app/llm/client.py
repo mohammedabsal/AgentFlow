@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 from typing import Any
@@ -20,12 +21,23 @@ class Qwen3CoderClient:
         self.temperature = settings.qwen_temperature
         self.max_new_tokens = settings.qwen_max_new_tokens
 
-    def _run(self, coroutine):
+    def _run(self, coroutine_fn, *args, **kwargs):
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(coroutine)
-        raise RuntimeError("Use the async Qwen3CoderClient methods from an async context.")
+            return asyncio.run(coroutine_fn(*args, **kwargs))
+        
+        def _run_in_thread():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(coroutine_fn(*args, **kwargs))
+            finally:
+                loop.close()
+                
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            future = ex.submit(_run_in_thread)
+            return future.result()
 
     async def a_call_llm(
         self,
@@ -49,13 +61,13 @@ class Qwen3CoderClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> str:
-        return self._run(self.a_call_llm(system_prompt, user_message, temperature, max_tokens))
+        return self._run(self.a_call_llm, system_prompt, user_message, temperature, max_tokens)
 
     async def a_list_installed_models(self) -> dict[str, Any]:
         return await self.provider.list_models()
 
     def list_installed_models(self) -> dict[str, Any]:
-        return self._run(self.a_list_installed_models())
+        return self._run(self.a_list_installed_models)
 
     def generate_plan(self, project_prompt: str) -> dict[str, Any]:
         system_prompt = """You are a production AI software engineering planner.
@@ -240,7 +252,7 @@ Return JSON keys:
         task_description: str,
         context: dict[str, Any],
     ) -> dict[str, Any]:
-        return self._run(self.a_execute_agent_task(agent_role, task_description, context))
+        return self._run(self.a_execute_agent_task, agent_role, task_description, context)
 
     def _parse_json_or_default(
         self,
@@ -290,3 +302,26 @@ Return JSON keys:
                 "estimated_tokens": 8000,
                 "plan_version": "2.0",
             }
+
+
+class LLMClient(Qwen3CoderClient):
+    """Backward-compatible adapter used by the multi-agent runtime.
+
+    The upgraded orchestration imports `LLMClient` and expects an async
+    `generate(prompt=..., system=..., temperature=..., max_tokens=...)` method.
+    This adapter keeps that contract while reusing provider-based execution.
+    """
+
+    async def generate(
+        self,
+        prompt: str,
+        system: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4000,
+    ) -> str:
+        return await self.a_call_llm(
+            system_prompt=system or "You are a helpful software engineering assistant.",
+            user_message=prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )

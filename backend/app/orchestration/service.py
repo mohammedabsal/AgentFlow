@@ -169,7 +169,7 @@ class AutonomousProjectService:
             outcome = await engine.execute_plan_async(plan_snapshot, run_id)
             
             # Update run with outcome
-            run.status = outcome.status
+            run.status = outcome.status.value if hasattr(outcome.status, "value") else str(outcome.status)
             run.output = {"summary": outcome.summary, "project_id": project_id}
             run.state = {
                 "phase": "completed",
@@ -182,7 +182,7 @@ class AutonomousProjectService:
             for artifact in outcome.artifacts:
                 record = Artifact(
                     run_id=run_id,
-                    kind=artifact.kind,
+                    kind=artifact.kind.value if hasattr(artifact.kind, "value") else str(artifact.kind),
                     path=artifact.path,
                     content=artifact.content,
                     artifact_metadata=artifact.artifact_metadata,

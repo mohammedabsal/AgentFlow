@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 
 from app.llm.qwen_client import Qwen3CoderClient
-from app.orchestration.contracts import GeneratedArtifactContract, GeneratedPlanContract, PlanStepContract, RunOutcomeContract
+from app.orchestration.contracts import ArtifactType, ExecutionStatus, GeneratedArtifactContract, GeneratedPlanContract, PlanStepContract, RunOutcomeContract
 from app.orchestration.runtime import AutonomousRunRuntime
 
 logger = logging.getLogger(__name__)
@@ -24,18 +25,25 @@ class AutonomousAppEngine:
                 plan_data = self.llm_client.generate_plan(prompt)
                 logger.info(f"Generated plan for project {project_id} using LLM")
                 
-                # Build steps from LLM response
+                # Build steps from LLM response. If the model omits dependencies,
+                # synthesize a conservative local-execution graph instead of
+                # launching every agent at once.
                 steps = []
+                task_ids_by_role = {task.get("agent_role", ""): task.get("task_id", "") for task in plan_data.get("tasks", [])}
                 for task in plan_data.get("tasks", []):
+                    role = task.get("agent_role", "")
+                    dependencies = self._task_dependencies(task, role, task_ids_by_role)
                     steps.append(
                         PlanStepContract(
                             id=task.get("task_id", ""),
                             title=task.get("description", "")[:50],
-                            agent=self._agent_role_to_name(task.get("agent_role", "")),
+                            agent=self._agent_role_to_name(role),
                             description=task.get("description", ""),
+                            dependencies=dependencies,
                         )
                     )
                 
+                steps = self._complete_plan_steps(steps)
                 return GeneratedPlanContract(
                     project_id=project_id,
                     project_name=project_name,
@@ -142,6 +150,9 @@ class AutonomousAppEngine:
             "frontend": "Frontend Agent",
             "backend": "Backend Agent",
             "database": "Database Agent",
+            "auth": "Auth Agent",
+            "devops": "DevOps Agent",
+            "packager": "Packaging Agent",
             "integration": "Integration Agent",
             "debug": "Debug Agent",
             "testing": "Testing Agent",
@@ -149,6 +160,69 @@ class AutonomousAppEngine:
             "deploy": "Deployment Agent",
         }
         return mapping.get(role, role.title())
+
+    def _task_dependencies(self, task: dict, role: str, task_ids_by_role: dict[str, str]) -> list[str]:
+        """Extract or infer dependencies for an LLM-generated task."""
+        explicit = task.get("dependencies") or task.get("depends_on") or task.get("requires")
+        if isinstance(explicit, list):
+            return [task_ids_by_role.get(str(item), str(item)) for item in explicit if item]
+
+        default_roles = {
+            "planner": ["prompt_refinement"],
+            "architect": ["planner"],
+            "frontend": ["architect"],
+            "backend": ["architect"],
+            "database": ["architect"],
+            "auth": ["architect", "backend"],
+            "devops": ["frontend", "backend", "database"],
+            "integration": ["frontend", "backend", "database", "auth", "devops"],
+            "testing": ["integration"],
+            "self_healing": ["testing"],
+            "packager": ["self_healing"],
+            "deploy": ["testing"],
+        }.get(role, [])
+        return [task_ids_by_role[dep_role] for dep_role in default_roles if task_ids_by_role.get(dep_role)]
+
+    def _complete_plan_steps(self, steps: list[PlanStepContract]) -> list[PlanStepContract]:
+        """Ensure an LLM mini-plan still expands into a full code-generation run."""
+        if not steps:
+            return steps
+
+        role_by_agent = {self._name_to_agent_role(step.agent): step for step in steps}
+        id_by_role = {role: step.id for role, step in role_by_agent.items()}
+
+        required = [
+            ("prompt_refinement", "refine", "Refine prompt", "Prompt Refinement Agent", "Turn the user prompt into structured product requirements and acceptance criteria.", []),
+            ("planner", "planner", "Plan execution graph", "Planner Agent", "Break the request into a dependency-aware execution graph with agent lanes.", ["prompt_refinement"]),
+            ("architect", "architect", "Design architecture", "Architecture Agent", "Define folder structure, database schema, API boundaries, and the execution graph.", ["planner"]),
+            ("frontend", "frontend", "Generate frontend", "Frontend Agent", "Generate the React/Next.js UI and streaming workspace.", ["architect"]),
+            ("backend", "backend", "Generate backend", "Backend Agent", "Generate FastAPI routes, services, and orchestration hooks.", ["architect"]),
+            ("database", "database", "Generate database", "Database Agent", "Generate schema, migrations, and persistence logic.", ["architect"]),
+            ("auth", "auth", "Generate auth", "Auth Agent", "Generate auth routes, contracts, and integration notes.", ["architect", "backend"]),
+            ("devops", "devops", "Generate devops", "DevOps Agent", "Generate Docker, environment, and local deployment setup.", ["frontend", "backend", "database"]),
+            ("integration", "integration", "Integrate systems", "Integration Agent", "Wire client, API, storage, and execution flows.", ["frontend", "backend", "database", "auth", "devops"]),
+            ("testing", "testing", "Run tests", "Testing Agent", "Generate and run build, lint, and smoke tests.", ["integration"]),
+            ("self_healing", "self_healing", "Self-heal failures", "Self-Healing Agent", "Repair build and runtime issues and re-run validation until healthy.", ["testing"]),
+            ("packager", "packager", "Package project", "Packaging Agent", "Prepare ZIP export metadata for the generated project.", ["self_healing"]),
+        ]
+
+        completed_steps = list(steps)
+        for role, fallback_id, title, agent, description, dependency_roles in required:
+            if role in role_by_agent:
+                continue
+            dependencies = [id_by_role[dep_role] for dep_role in dependency_roles if dep_role in id_by_role]
+            step_id = fallback_id
+            completed_steps.append(
+                PlanStepContract(
+                    id=step_id,
+                    title=title,
+                    agent=agent,
+                    description=description,
+                    dependencies=dependencies,
+                )
+            )
+            id_by_role[role] = step_id
+        return completed_steps
 
     def execute_plan(self, plan: GeneratedPlanContract, run_id: str) -> RunOutcomeContract:
         """Execute plan steps, calling LLM agents if available."""
@@ -178,7 +252,8 @@ class AutonomousAppEngine:
                     
                     artifacts.append(
                         GeneratedArtifactContract(
-                            kind=artifact_kind,
+                            artifact_id=str(uuid.uuid4()),
+                            kind=ArtifactType.FILE,
                             path=artifact_path,
                             content=json.dumps(result, indent=2),
                             artifact_metadata={
@@ -236,7 +311,8 @@ Status: completed
         
         artifacts.append(
             GeneratedArtifactContract(
-                kind="summary",
+                artifact_id=str(uuid.uuid4()),
+                kind=ArtifactType.FILE,
                 path="generated/EXECUTION_SUMMARY.md",
                 content=summary_content,
                 artifact_metadata={"stage": "summary"},
@@ -245,7 +321,9 @@ Status: completed
 
         return RunOutcomeContract(
             run_id=run_id,
-            status="completed",
+            execution_id=run_id,
+            project_id=plan.project_id,
+            status=ExecutionStatus.COMPLETED,
             summary=f"Successfully executed {len(plan.steps)} steps and generated {len(artifacts)} artifacts.",
             artifacts=artifacts,
         )
@@ -265,6 +343,12 @@ Status: completed
             return "backend"
         elif "database" in name_lower:
             return "database"
+        elif "auth" in name_lower:
+            return "auth"
+        elif "devops" in name_lower or "deploy" in name_lower:
+            return "devops"
+        elif "package" in name_lower:
+            return "packager"
         elif "integrat" in name_lower:
             return "integration"
         elif "debug" in name_lower:
@@ -277,33 +361,33 @@ Status: completed
             return "deploy"
         return "architect"  # default
 
-    def execute_plan(self, plan: GeneratedPlanContract, run_id: str) -> RunOutcomeContract:
-        """Execute the plan via the autonomous runtime."""
-        return self.runtime.execute_plan(plan, run_id)
-
     def _mock_artifacts(self, plan: GeneratedPlanContract) -> list[GeneratedArtifactContract]:
         """Generate mock artifacts when LLM is not available."""
         return [
             GeneratedArtifactContract(
-                kind="architecture",
+                artifact_id=str(uuid.uuid4()),
+                kind=ArtifactType.SCHEMA,
                 path="docs/generated-architecture.md",
                 content=f"# {plan.project_name}\n\n{plan.objective}\n",
                 artifact_metadata={"stage": "architecture"},
             ),
             GeneratedArtifactContract(
-                kind="frontend",
+                artifact_id=str(uuid.uuid4()),
+                kind=ArtifactType.FILE,
                 path="frontend/src/app/page.tsx",
                 content="// Lovable-style workspace scaffold generated by the autonomous engine\n",
                 artifact_metadata={"stage": "frontend"},
             ),
             GeneratedArtifactContract(
-                kind="backend",
+                artifact_id=str(uuid.uuid4()),
+                kind=ArtifactType.FILE,
                 path="backend/app/api/routes/platform.py",
                 content="# Platform orchestration endpoints scaffolded by the autonomous engine\n",
                 artifact_metadata={"stage": "backend"},
             ),
             GeneratedArtifactContract(
-                kind="tests",
+                artifact_id=str(uuid.uuid4()),
+                kind=ArtifactType.TEST,
                 path="tests/platform_smoke_test.md",
                 content="- verify prompt planning\n- verify run creation\n- verify artifact emission\n",
                 artifact_metadata={"stage": "testing"},

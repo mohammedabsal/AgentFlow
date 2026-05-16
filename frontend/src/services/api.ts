@@ -1,5 +1,6 @@
 const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000/api';
 const apiOrigin = new URL(baseUrl).origin;
+export const apiBaseUrl = baseUrl;
 
 export interface ProjectRecord {
   id: string;
@@ -85,4 +86,5 @@ export const api = {
   run: (runId: string) => request<RunRecord>(`/runs/${runId}`),
   retryRun: (runId: string) => request<RunRecord>(`/runs/${runId}/retry`, { method: 'POST' }),
   artifacts: (runId: string) => request<ArtifactRecord[]>(`/runs/${runId}/artifacts`),
+  downloadUrl: (runId: string) => `${baseUrl}/runs/${runId}/download`,
 };

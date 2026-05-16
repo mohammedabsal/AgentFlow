@@ -1,7 +1,7 @@
 'use client';
 
 import { ChevronDown, Folder, File, FolderOpen } from 'lucide-react';
-import { useState } from 'react';
+import { type ReactElement, useState } from 'react';
 
 interface WorkspaceSidebarProps {
   projectName: string;
@@ -52,7 +52,7 @@ export function WorkspaceSidebar({
     setExpandedFolders(newExpanded);
   };
 
-  const renderTree = (tree: Record<string, any>, prefix: string = ''): JSX.Element[] => {
+  const renderTree = (tree: Record<string, any>, prefix: string = ''): Array<ReactElement | null> => {
     return Object.entries(tree).map(([name, item]) => {
       const path = prefix ? `${prefix}/${name}` : name;
 

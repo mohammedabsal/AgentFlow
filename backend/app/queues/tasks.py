@@ -112,7 +112,7 @@ def execute_project_task(self, project_id: str, plan_id: str, run_id: str, plan_
                 outcome = future.result()
         
         # Update run with outcome
-        run.status = outcome.status
+        run.status = outcome.status.value if hasattr(outcome.status, "value") else str(outcome.status)
         run.output = {"summary": outcome.summary, "project_id": project_id}
         run.state = {
             "phase": "completed",
@@ -126,7 +126,7 @@ def execute_project_task(self, project_id: str, plan_id: str, run_id: str, plan_
         for artifact in outcome.artifacts:
             record = Artifact(
                 run_id=run_id,
-                kind=artifact.kind,
+                kind=artifact.kind.value if hasattr(artifact.kind, "value") else str(artifact.kind),
                 path=artifact.path,
                 content=artifact.content,
                 artifact_metadata=artifact.artifact_metadata,
@@ -139,7 +139,7 @@ def execute_project_task(self, project_id: str, plan_id: str, run_id: str, plan_
         
         return {
             "run_id": run_id,
-            "status": outcome.status,
+            "status": run.status,
             "summary": outcome.summary,
             "artifact_count": len(artifacts),
         }

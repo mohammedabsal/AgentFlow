@@ -30,8 +30,10 @@ class Settings(BaseSettings):
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.0-flash"
-    llm_request_timeout: float = 300.0  # 5 minutes for slow models like qwen2.5-coder
-    llm_max_retries: int = 3  # Increase retries for network resilience
+    llm_request_timeout: float = 600.0  # Local code models can take several minutes per large generation
+    llm_max_retries: int = 1  # Avoid multiplying long local Ollama requests after timeouts
+    llm_max_parallel_requests: int = 1  # Local Ollama usually performs best with serialized generations
+    product_builder_llm_roles: list[str] = ["prompt_refinement", "planner", "architect"]
     qwen_temperature: float = 0.3
     qwen_max_new_tokens: int = 8192
     project_workspace_root: str = "./generated-workspaces"

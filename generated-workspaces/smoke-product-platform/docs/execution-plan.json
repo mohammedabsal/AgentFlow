@@ -1,0 +1,38 @@
+{
+  "agents": [
+    "prompt_refiner",
+    "planner",
+    "architecture",
+    "frontend",
+    "backend",
+    "database",
+    "auth",
+    "devops",
+    "testing",
+    "self_healing",
+    "packager"
+  ],
+  "execution_graph": {
+    "frontend": [
+      "architecture"
+    ],
+    "backend": [
+      "architecture",
+      "database",
+      "auth"
+    ],
+    "devops": [
+      "frontend",
+      "backend",
+      "database"
+    ],
+    "testing": [
+      "frontend",
+      "backend"
+    ],
+    "packager": [
+      "testing",
+      "self_healing"
+    ]
+  }
+}

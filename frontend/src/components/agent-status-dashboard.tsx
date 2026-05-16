@@ -7,30 +7,33 @@ interface AgentStatusDashboardProps {
 }
 
 export function AgentStatusDashboard({ logs }: AgentStatusDashboardProps) {
-  // Extract unique agents from logs
   const agents = [
-    { name: 'Prompt Refiner', status: 'active' },
-    { name: 'Research Agent', status: 'pending' },
-    { name: 'Planner', status: 'pending' },
-    { name: 'Architect', status: 'pending' },
+    { name: 'Prompt Refinement Agent', status: 'pending' },
+    { name: 'Planner Agent', status: 'pending' },
+    { name: 'Architecture Agent', status: 'pending' },
     { name: 'Frontend Agent', status: 'pending' },
     { name: 'Backend Agent', status: 'pending' },
     { name: 'Database Agent', status: 'pending' },
-    { name: 'API Agent', status: 'pending' },
+    { name: 'Auth Agent', status: 'pending' },
     { name: 'DevOps Agent', status: 'pending' },
+    { name: 'Integration Agent', status: 'pending' },
     { name: 'Testing Agent', status: 'pending' },
     { name: 'Self-Healing Agent', status: 'pending' },
+    { name: 'Packaging Agent', status: 'pending' },
   ];
 
   // Update agent status based on logs
   logs.forEach((log) => {
     agents.forEach((agent) => {
-      if (log.message.toLowerCase().includes(agent.name.toLowerCase())) {
-        if (log.message.toLowerCase().includes('completed') || log.message.toLowerCase().includes('done')) {
+      const message = log.message.toLowerCase();
+      const agentName = agent.name.toLowerCase();
+      const shortName = agentName.replace(' agent', '');
+      if (message.includes(agentName) || message.includes(shortName)) {
+        if (message.includes('completed') || message.includes('done')) {
           agent.status = 'completed';
-        } else if (log.message.toLowerCase().includes('error') || log.message.toLowerCase().includes('failed')) {
+        } else if (message.includes('error') || message.includes('failed')) {
           agent.status = 'error';
-        } else if (log.message.toLowerCase().includes('starting') || log.message.toLowerCase().includes('running')) {
+        } else if (message.includes('started') || message.includes('starting') || message.includes('running')) {
           agent.status = 'active';
         }
       }

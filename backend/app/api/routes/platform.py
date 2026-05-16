@@ -4,7 +4,7 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,7 @@ from app.orchestration.service import AutonomousProjectService
 from app.schemas.platform import ArtifactRead, PlanCreate, PlanRead, ProjectCreate, ProjectRead, RunCreate, RunRead
 from app.streams import stream_manager
 from app.tracing.omnium import emit_trace_event
+from app.product_builder import PackagingService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -125,7 +126,7 @@ def list_project_plans(project_id: str, db: Session = Depends(get_db)) -> list[P
 
 
 @router.post("/projects/{project_id}/runs", response_model=RunRead, status_code=status.HTTP_201_CREATED)
-async def create_run(project_id: str, payload: RunCreate | None = None, db: Session = Depends(get_db)) -> RunRead:
+def create_run(project_id: str, payload: RunCreate | None = None, db: Session = Depends(get_db)) -> RunRead:
     project = db.get(Project, project_id)
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
@@ -162,6 +163,27 @@ def retry_run(run_id: str, db: Session = Depends(get_db)) -> RunRead:
 def list_run_artifacts(run_id: str, db: Session = Depends(get_db)) -> list[ArtifactRead]:
     artifacts = db.scalars(select(Artifact).where(Artifact.run_id == run_id).order_by(Artifact.created_at.asc())).all()
     return [_serialize_artifact(artifact) for artifact in artifacts]
+
+
+@router.get("/runs/{run_id}/download")
+def download_run_project(run_id: str, db: Session = Depends(get_db)) -> FileResponse:
+    run = db.get(Run, run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+
+    packager = PackagingService()
+    archive = packager.archive_path(run_id)
+    if not archive.exists():
+        try:
+            archive = packager.create_zip(run_id=run_id, project_id=run.project_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    return FileResponse(
+        path=str(archive),
+        media_type="application/zip",
+        filename=f"agentflow-run-{run_id}.zip",
+    )
 
 
 @router.get("/runs/{run_id}/stream")

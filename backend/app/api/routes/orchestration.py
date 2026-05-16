@@ -11,6 +11,7 @@ Exposes:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -90,13 +91,6 @@ async def execute_workflow(
     Returns execution_id for tracking and WebSocket connection.
     """
     try:
-        # Define message callback for streaming
-        async def stream_callback(message):
-            await connection_manager.broadcast(execution_id, message)
-
-        # Note: We'll use a task to run this in background
-        # For now, return execution_id to client for WebSocket connection
-
         logger.info(f"Starting workflow: {request.project_name}")
 
         # Create plan first to validate input
@@ -106,12 +100,29 @@ async def execute_workflow(
             user_prompt=request.user_prompt,
         )
 
+        execution_id = plan.plan_id
+
+        # Define message callback for streaming
+        async def stream_callback(message):
+            await connection_manager.broadcast(execution_id, message)
+
+        # Start background execution
+        asyncio.create_task(
+            engine.execute_workflow(
+                project_id=plan.project_id,
+                project_name=request.project_name,
+                user_prompt=request.user_prompt,
+                execution_id=execution_id,
+                on_message=stream_callback,
+            )
+        )
+
         # Return execution info for client to connect via WebSocket
         return {
-            "execution_id": plan.plan_id,
+            "execution_id": execution_id,
             "project_name": request.project_name,
             "status": "initialized",
-            "websocket_url": f"/api/orchestration/ws/{plan.plan_id}",
+            "websocket_url": f"/api/orchestration/ws/{execution_id}",
             "message": "Connect to WebSocket URL for real-time updates",
         }
 
