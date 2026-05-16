@@ -70,32 +70,10 @@ class OrchestrationEngine:
             project_id=project_id,
             project_name=project_name,
             user_prompt=user_prompt,
+            refined_prompt=user_prompt,
         )
 
-        # Get refined prompt from Prompt Refiner Agent
-        context = AgentContext(
-            execution_id=plan.plan_id,
-            project_id=project_id,
-            project_name=project_name,
-            user_prompt=user_prompt,
-        )
-
-        try:
-            refiner = get_agent(AgentRole.PROMPT_REFINER, self.llm_client)
-            task_input = AgentTaskInput(
-                task_id="refine-prompt",
-                agent=AgentRole.PROMPT_REFINER,
-                context=context,
-                requirements="Refine the user prompt",
-            )
-            result = await refiner.execute(task_input)
-            plan.refined_prompt = context.refined_prompt
-
-            logger.info(f"Created execution plan {plan.plan_id}")
-
-        except Exception as e:
-            logger.error(f"Failed to create execution plan: {e}")
-            plan.refined_prompt = user_prompt
+        logger.info(f"Created execution plan {plan.plan_id}")
 
         return plan
 
