@@ -25,6 +25,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 
+from app.core.config import settings
 from app.llm.client import LLMClient
 from app.orchestration.contracts import (
     AgentRole,
@@ -994,4 +995,23 @@ def get_agent(role: AgentRole, llm_client: LLMClient) -> BaseAgent:
     agent_class = AGENT_REGISTRY.get(role)
     if not agent_class:
         raise ValueError(f"Unknown agent role: {role}")
+
+    # Route to a specific provider or model if configured for this agent
+    provider_override = getattr(settings, "agent_providers", {}).get(role.value)
+    model_override = getattr(settings, "agent_models", {}).get(role.value)
+    
+    if provider_override or model_override:
+        original_provider = settings.llm_provider
+        original_model = settings.llm_model
+        if provider_override:
+            settings.llm_provider = provider_override
+        if model_override:
+            settings.llm_model = model_override
+        try:
+            agent_llm = LLMClient()
+        finally:
+            settings.llm_provider = original_provider
+            settings.llm_model = original_model
+        return agent_class(agent_llm)
+
     return agent_class(llm_client)

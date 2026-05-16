@@ -93,26 +93,22 @@ def execute_project_task(self, project_id: str, plan_id: str, run_id: str, plan_
         # Run the async execution. If an event loop is already running (e.g. eager Celery
         # execution inside an async server), run the coroutine in a dedicated thread
         # with its own event loop to avoid "asyncio.run() cannot be called from a running event loop".
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            # No running loop in this thread — safe to use asyncio.run
-            outcome = asyncio.run(engine.execute_plan_async(plan_snapshot, run_id))
-        else:
-            # Running loop detected — execute in a new thread with its own loop
-            import concurrent.futures
+        import concurrent.futures
 
-            def _run_in_thread():
-                return asyncio.new_event_loop().run_until_complete(
-                    engine.execute_plan_async(plan_snapshot, run_id)
-                )
+        def _run_in_thread():
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            try:
+                return new_loop.run_until_complete(engine.execute_plan_async(plan_snapshot, run_id))
+            finally:
+                new_loop.close()
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                future = ex.submit(_run_in_thread)
-                outcome = future.result()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            future = ex.submit(_run_in_thread)
+            outcome = future.result()
         
         # Update run with outcome
-        run.status = outcome.status.value if hasattr(outcome.status, "value") else str(outcome.status)
+        run.status = outcome.status
         run.output = {"summary": outcome.summary, "project_id": project_id}
         run.state = {
             "phase": "completed",
@@ -126,7 +122,7 @@ def execute_project_task(self, project_id: str, plan_id: str, run_id: str, plan_
         for artifact in outcome.artifacts:
             record = Artifact(
                 run_id=run_id,
-                kind=artifact.kind.value if hasattr(artifact.kind, "value") else str(artifact.kind),
+                kind=artifact.kind,
                 path=artifact.path,
                 content=artifact.content,
                 artifact_metadata=artifact.artifact_metadata,
@@ -139,7 +135,7 @@ def execute_project_task(self, project_id: str, plan_id: str, run_id: str, plan_
         
         return {
             "run_id": run_id,
-            "status": run.status,
+            "status": outcome.status,
             "summary": outcome.summary,
             "artifact_count": len(artifacts),
         }

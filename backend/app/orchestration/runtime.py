@@ -33,8 +33,8 @@ class AgentExecutionRecord:
 class AutonomousRunRuntime:
     def __init__(self, llm_client: Qwen3CoderClient | None = None) -> None:
         self.llm_client = llm_client or Qwen3CoderClient()
-        self.max_self_heal_retries = settings.self_heal_max_retries
-        self.llm_semaphore = asyncio.Semaphore(max(1, settings.llm_max_parallel_requests))
+        self.max_self_heal_retries = getattr(settings, "self_heal_max_retries", 2)
+        self.llm_semaphore = asyncio.Semaphore(max(1, getattr(settings, "llm_max_parallel_requests", 5)))
 
     def _step_role(self, agent_name: str) -> str:
         normalized = agent_name.lower()
@@ -127,10 +127,25 @@ class AutonomousRunRuntime:
             try:
                 role = self._step_role(step.agent)
                 fallback = ProductBuilderAgents(context).build(role)
-                if role in settings.product_builder_llm_roles:
+                if role in getattr(settings, "product_builder_llm_roles", []):
                     await self._emit(run_id, "tool_call", {"step_id": step.id, "agent": step.agent, "tool": "llm_provider.generate", "status": "started", "provider": settings.llm_provider})
                     async with self.llm_semaphore:
-                        result = await self.llm_client.a_execute_agent_task(role, step.description, context)
+                        provider_override = getattr(settings, "agent_providers", {}).get(role)
+                        model_override = getattr(settings, "agent_models", {}).get(role)
+                        
+                        if provider_override or model_override:
+                            orig_p = settings.llm_provider
+                            orig_m = settings.llm_model
+                            if provider_override: settings.llm_provider = provider_override
+                            if model_override: settings.llm_model = model_override
+                            try:
+                                temp_client = Qwen3CoderClient()
+                            finally:
+                                settings.llm_provider = orig_p
+                                settings.llm_model = orig_m
+                            result = await temp_client.a_execute_agent_task(role, step.description, context)
+                        else:
+                            result = await self.llm_client.a_execute_agent_task(role, step.description, context)
                     await self._emit(run_id, "tool_call", {"step_id": step.id, "agent": step.agent, "tool": "llm_provider.generate", "status": "completed", "provider": settings.llm_provider})
                 else:
                     await self._emit(run_id, "tool_call", {"step_id": step.id, "agent": step.agent, "tool": "deterministic_product_builder", "status": "completed", "provider": "internal"})

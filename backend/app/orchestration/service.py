@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from dataclasses import dataclass
 
 from fastapi import HTTPException, status
@@ -101,28 +102,41 @@ class AutonomousProjectService:
         self.db.commit()
         self.db.refresh(run)
 
-        # Dispatch to background execution
-        try:
-            # Try Celery task first (production with Redis/workers)
-            from app.queues.tasks import execute_project_task
-            execute_project_task.delay(
-                project_id=str(project.id),
-                plan_id=str(plan.id),
-                run_id=str(run.id),
-                plan_snapshot_dict=plan_snapshot.model_dump(),
-            )
-            logger.info(f"Dispatched run {run.id} to Celery worker")
-        except Exception as e:
-            logger.warning(f"Celery dispatch failed ({e}), using asyncio background task instead")
-            # Fallback: use asyncio background task (development without Redis)
-            asyncio.create_task(
-                self._execute_project_async(
-                    project_id=str(project.id),
-                    plan_id=str(plan.id),
-                    run_id=str(run.id),
-                    plan_snapshot_dict=plan_snapshot.model_dump(),
+        project_id_str = str(project.id)
+        plan_id_str = str(plan.id)
+        run_id_str = str(run.id)
+        plan_dict = plan_snapshot.model_dump()
+
+        def background_execution():
+            try:
+                # Try Celery task first (production with Redis/workers)
+                from app.queues.tasks import execute_project_task
+                execute_project_task.delay(
+                    project_id=project_id_str,
+                    plan_id=plan_id_str,
+                    run_id=run_id_str,
+                    plan_snapshot_dict=plan_dict,
                 )
-            )
+                logger.info(f"Dispatched run {run_id_str} to Celery worker (or eager thread)")
+            except Exception as e:
+                logger.warning(f"Celery dispatch failed ({e}), using local asyncio loop instead")
+                # Fallback: use local event loop in this thread
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                try:
+                    new_loop.run_until_complete(
+                        self._execute_project_async(
+                            project_id=project_id_str,
+                            plan_id=plan_id_str,
+                            run_id=run_id_str,
+                            plan_snapshot_dict=plan_dict,
+                        )
+                    )
+                finally:
+                    new_loop.close()
+                    
+        # Run in a background thread to prevent blocking the API response
+        threading.Thread(target=background_execution, daemon=True).start()
         
         return run
 
@@ -169,7 +183,7 @@ class AutonomousProjectService:
             outcome = await engine.execute_plan_async(plan_snapshot, run_id)
             
             # Update run with outcome
-            run.status = outcome.status.value if hasattr(outcome.status, "value") else str(outcome.status)
+            run.status = outcome.status
             run.output = {"summary": outcome.summary, "project_id": project_id}
             run.state = {
                 "phase": "completed",
@@ -182,7 +196,7 @@ class AutonomousProjectService:
             for artifact in outcome.artifacts:
                 record = Artifact(
                     run_id=run_id,
-                    kind=artifact.kind.value if hasattr(artifact.kind, "value") else str(artifact.kind),
+                    kind=artifact.kind,
                     path=artifact.path,
                     content=artifact.content,
                     artifact_metadata=artifact.artifact_metadata,

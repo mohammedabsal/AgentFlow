@@ -19,48 +19,6 @@ class AutonomousAppEngine:
 
     def build_plan(self, project_id: str, project_name: str, prompt: str) -> GeneratedPlanContract:
         """Build execution plan from user prompt, using LLM if available."""
-        # Try to use LLM for real plan generation
-        if self.llm_client:
-            try:
-                plan_data = self.llm_client.generate_plan(prompt)
-                logger.info(f"Generated plan for project {project_id} using LLM")
-                
-                # Build steps from LLM response. If the model omits dependencies,
-                # synthesize a conservative local-execution graph instead of
-                # launching every agent at once.
-                steps = []
-                task_ids_by_role = {task.get("agent_role", ""): task.get("task_id", "") for task in plan_data.get("tasks", [])}
-                for task in plan_data.get("tasks", []):
-                    role = task.get("agent_role", "")
-                    dependencies = self._task_dependencies(task, role, task_ids_by_role)
-                    steps.append(
-                        PlanStepContract(
-                            id=task.get("task_id", ""),
-                            title=task.get("description", "")[:50],
-                            agent=self._agent_role_to_name(role),
-                            description=task.get("description", ""),
-                            dependencies=dependencies,
-                        )
-                    )
-                
-                steps = self._complete_plan_steps(steps)
-                return GeneratedPlanContract(
-                    project_id=project_id,
-                    project_name=project_name,
-                    objective=prompt,
-                    stack={
-                        "frontend": ["Next.js 15", "React", "TailwindCSS", "shadcn/ui", "Sandpack"],
-                        "backend": ["FastAPI", "Supabase Postgres", "Redis"],
-                        "models": ["Qwen Coder"],
-                    },
-                    steps=steps or self._default_steps(),
-                    risks=[],
-                )
-            except Exception as e:
-                logger.warning(f"LLM plan generation failed, using default: {e}")
-                self.llm_client = None
-        
-        # Fallback to default plan
         return GeneratedPlanContract(
             project_id=project_id,
             project_name=project_name,
